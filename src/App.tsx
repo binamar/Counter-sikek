@@ -57,7 +57,11 @@ export default function App() {
   const [muted, setMuted] = useState<boolean>(false);
   const [touchMode, setTouchMode] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false;
-    return 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+    return (
+      'ontouchstart' in window ||
+      navigator.maxTouchPoints > 0 ||
+      window.matchMedia('(pointer: coarse)').matches
+    );
   });
 
   useEffect(() => {
@@ -110,7 +114,7 @@ export default function App() {
   }, []);
 
   return (
-    <div className="relative w-screen h-screen overflow-hidden bg-[#0b0e12]">
+    <div className="relative w-screen h-[100dvh] overflow-hidden bg-[#0b0e12]">
       {/* Isolated WebGL viewport mount container */}
       <div ref={canvasMountRef} className="absolute inset-0 w-full h-full" />
 
