@@ -2,5 +2,7 @@
   "name": "Dustline: Compound Zero",
   "description": "Single-level 3D tactical first-person shooter built with procedural geometry, procedural textures, and synthesized audio.",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }

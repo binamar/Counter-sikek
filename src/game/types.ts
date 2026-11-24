@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 
-export type GameMode = 'skirmish' | 'defusal';
+export type GameMode = 'casual' | 'skirmish' | 'defusal';
 export type GamePhase = 'menu' | 'playing' | 'paused' | 'victory' | 'defeat';
 export type WeaponId = 'ak47' | 'm4s' | 'awp';
 

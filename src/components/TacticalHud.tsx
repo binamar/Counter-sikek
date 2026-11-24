@@ -311,10 +311,12 @@ export const TacticalHud: React.FC<TacticalHudProps> = ({
 
       {/* Top-Center: Match Timer / Wave & Hostile Counter */}
       <div className="absolute top-2.5 sm:top-4 left-1/2 -translate-x-1/2 flex items-center gap-2.5 sm:gap-4 bg-[#0b0e12]/85 border border-white/15 px-2.5 py-1.5 sm:px-4 sm:py-2">
-        {hud.mode === 'skirmish' ? (
+        {hud.mode !== 'defusal' ? (
           <>
             <div className="text-center">
-              <div className="text-[10px] sm:text-[11px] text-slate-400 leading-none">Wave</div>
+              <div className="text-[10px] sm:text-[11px] text-slate-400 leading-none">
+                {hud.mode === 'casual' ? 'Casual' : 'Wave'}
+              </div>
               <div className="font-display text-sm sm:text-lg font-bold text-amber-400 tabular-nums leading-tight">
                 {hud.wave}
               </div>

@@ -72,6 +72,29 @@ export interface WeaponViewModelRig {
   dispose: () => void;
 }
 
+function makeBeveledExtrude(
+  pts: Array<[number, number]>,
+  depth: number,
+  bevel = 0.004
+): THREE.ExtrudeGeometry {
+  const shape = new THREE.Shape();
+  shape.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length; i++) {
+    shape.lineTo(pts[i][0], pts[i][1]);
+  }
+  shape.closePath();
+  const geo = new THREE.ExtrudeGeometry(shape, {
+    depth,
+    bevelEnabled: true,
+    bevelThickness: bevel,
+    bevelSize: bevel,
+    bevelSegments: 2,
+    steps: 1,
+  });
+  geo.center();
+  return geo;
+}
+
 export function createWeaponViewModelRig(): WeaponViewModelRig {
   const root = new THREE.Group();
   const geometries: THREE.BufferGeometry[] = [];
@@ -86,23 +109,31 @@ export function createWeaponViewModelRig(): WeaponViewModelRig {
     return m;
   };
 
-  // Distinct PBR materials with >= 0.25 roughness contrast
-  const gunmetal = trackMat(new THREE.MeshStandardMaterial({ color: 0x262a32, roughness: 0.32, metalness: 0.85 }));
-  const darkPolymer = trackMat(new THREE.MeshStandardMaterial({ color: 0x16191e, roughness: 0.78, metalness: 0.12 }));
-  const walnutWood = trackMat(new THREE.MeshStandardMaterial({ color: 0x6f4324, roughness: 0.68, metalness: 0.05 }));
-  const olivePolymer = trackMat(new THREE.MeshStandardMaterial({ color: 0x3b4d38, roughness: 0.74, metalness: 0.1 }));
-  const brushedBolt = trackMat(new THREE.MeshStandardMaterial({ color: 0x9ca3af, roughness: 0.24, metalness: 0.9 }));
-  const opticLens = trackMat(
-    new THREE.MeshStandardMaterial({
-      color: 0x14b8a6,
-      emissive: 0x0f766e,
-      emissiveIntensity: 0.45,
-      roughness: 0.12,
-      metalness: 0.8,
+  // Physically calibrated PBR materials (>= 0.25 roughness spread between metal & grip/wood)
+  const bluedSteel = trackMat(new THREE.MeshStandardMaterial({ color: 0x22262d, roughness: 0.28, metalness: 0.88 }));
+  const anodizedRail = trackMat(new THREE.MeshStandardMaterial({ color: 0x1b1f26, roughness: 0.36, metalness: 0.82 }));
+  const darkPolymer = trackMat(new THREE.MeshStandardMaterial({ color: 0x171a1f, roughness: 0.8, metalness: 0.08 }));
+  const walnutWood = trackMat(new THREE.MeshStandardMaterial({ color: 0x6f4120, roughness: 0.64, metalness: 0.04 }));
+  const oliveChassis = trackMat(new THREE.MeshStandardMaterial({ color: 0x3b4d37, roughness: 0.72, metalness: 0.1 }));
+  const brushedBolt = trackMat(new THREE.MeshStandardMaterial({ color: 0xb0b7c2, roughness: 0.2, metalness: 0.92 }));
+  const bakeliteMag = trackMat(new THREE.MeshStandardMaterial({ color: 0x7c381c, roughness: 0.52, metalness: 0.12 }));
+  const opticGlass = trackMat(
+    new THREE.MeshPhysicalMaterial({
+      color: 0x0f766e,
+      emissive: 0x0d9488,
+      emissiveIntensity: 0.35,
+      roughness: 0.08,
+      metalness: 0.65,
+      clearcoat: 1.0,
     })
   );
-  const sleeveMat = trackMat(new THREE.MeshStandardMaterial({ color: 0x2f3530, roughness: 0.85, metalness: 0.05 }));
-  const gloveMat = trackMat(new THREE.MeshStandardMaterial({ color: 0x1b1e23, roughness: 0.72, metalness: 0.1 }));
+  const redDotMat = trackMat(
+    new THREE.MeshBasicMaterial({
+      color: 0xef4444,
+    })
+  );
+  const sleeveMat = trackMat(new THREE.MeshStandardMaterial({ color: 0x323930, roughness: 0.88, metalness: 0.03 }));
+  const gloveMat = trackMat(new THREE.MeshStandardMaterial({ color: 0x1b1e23, roughness: 0.76, metalness: 0.08 }));
 
   const addPart = (
     group: THREE.Group,
@@ -120,53 +151,249 @@ export function createWeaponViewModelRig(): WeaponViewModelRig {
     return mesh;
   };
 
-  const addForearmAndGlove = (group: THREE.Group) => {
-    // Support forearm + gloved hand
-    addPart(group, new THREE.BoxGeometry(0.085, 0.085, 0.34), sleeveMat, [-0.08, -0.14, 0.16], [0.22, -0.25, 0.1]);
-    addPart(group, new THREE.BoxGeometry(0.068, 0.062, 0.09), gloveMat, [-0.015, -0.06, -0.12], [0, 0, 0.12]);
-    // Trigger hand
-    addPart(group, new THREE.BoxGeometry(0.065, 0.07, 0.085), gloveMat, [0.005, -0.07, 0.12], [-0.2, 0, 0]);
+  const addTacticalArms = (group: THREE.Group) => {
+    // Sculpted forearm sleeve + elbow taper
+    addPart(
+      group,
+      new THREE.CylinderGeometry(0.044, 0.052, 0.34, 10),
+      sleeveMat,
+      [-0.085, -0.14, 0.16],
+      [1.34, 0.22, -0.12]
+    );
+    // Support gloved palm + wrapped fingers
+    addPart(group, new THREE.CapsuleGeometry(0.034, 0.045, 4, 8), gloveMat, [-0.012, -0.055, -0.14], [1.4, 0, 0.25]);
+    // Trigger hand glove
+    addPart(group, new THREE.CapsuleGeometry(0.034, 0.042, 4, 8), gloveMat, [0.005, -0.068, 0.11], [1.15, 0, 0]);
   };
 
-  // --- 1. AK-47M Tactical (9 parts + arms) ---
+  // ============================================================================
+  // 1. AK-47M Tactical (Sculpted Receiver, Curved Banana Mag, Lathe Barrel)
+  // ============================================================================
   const ak47 = new THREE.Group();
-  addPart(ak47, new THREE.BoxGeometry(0.052, 0.075, 0.34), gunmetal, [0, 0, 0]); // Receiver
-  addPart(ak47, new THREE.BoxGeometry(0.058, 0.065, 0.18), walnutWood, [0, -0.004, -0.25]); // Handguard
-  addPart(ak47, new THREE.BoxGeometry(0.044, 0.085, 0.22), walnutWood, [0, -0.03, 0.25], [-0.14, 0, 0]); // Stock
-  addPart(ak47, new THREE.BoxGeometry(0.038, 0.11, 0.052), darkPolymer, [0, -0.08, 0.09], [0.28, 0, 0]); // Pistol grip
-  addPart(ak47, new THREE.BoxGeometry(0.036, 0.17, 0.068), darkPolymer, [0, -0.1, -0.07], [-0.26, 0, 0]); // Curved mag
-  addPart(ak47, new THREE.CylinderGeometry(0.012, 0.014, 0.36, 10), gunmetal, [0, 0.012, -0.46], [Math.PI / 2, 0, 0]); // Barrel
-  addPart(ak47, new THREE.CylinderGeometry(0.01, 0.01, 0.2, 10), gunmetal, [0, 0.035, -0.27], [Math.PI / 2, 0, 0]); // Gas tube
-  addPart(ak47, new THREE.BoxGeometry(0.014, 0.032, 0.018), gunmetal, [0, 0.035, -0.58]); // Front sight post
-  addPart(ak47, new THREE.BoxGeometry(0.022, 0.016, 0.05), brushedBolt, [0.03, 0.015, -0.02]); // Bolt carrier
-  addForearmAndGlove(ak47);
+  // Beveled stamped receiver profile (drawn in XY side-profile, extruded along X width then rotated)
+  const akReceiverGeo = makeBeveledExtrude(
+    [
+      [-0.17, -0.03],
+      [0.17, -0.03],
+      [0.17, 0.03],
+      [0.09, 0.044],
+      [-0.15, 0.044],
+      [-0.17, 0.025],
+    ],
+    0.044,
+    0.005
+  );
+  addPart(ak47, akReceiverGeo, bluedSteel, [0, 0.005, 0], [0, Math.PI / 2, 0]);
 
-  // --- 2. M4-S Tactical Carbine (9 parts + arms) ---
+  // Sculpted walnut stock (angled comb)
+  const akStockGeo = makeBeveledExtrude(
+    [
+      [0.0, -0.02],
+      [0.24, -0.07],
+      [0.24, 0.015],
+      [0.0, 0.025],
+    ],
+    0.038,
+    0.005
+  );
+  addPart(ak47, akStockGeo, walnutWood, [0, -0.02, 0.26], [0, Math.PI / 2, 0]);
+
+  // Ribbed walnut handguard
+  const akHandguardGeo = makeBeveledExtrude(
+    [
+      [-0.1, -0.028],
+      [0.1, -0.024],
+      [0.1, 0.022],
+      [-0.1, 0.028],
+    ],
+    0.048,
+    0.006
+  );
+  addPart(ak47, akHandguardGeo, walnutWood, [0, -0.004, -0.25], [0, Math.PI / 2, 0]);
+
+  // Curved Banana Magazine (extruded crescent profile!)
+  const akMagShape = new THREE.Shape();
+  akMagShape.moveTo(-0.028, 0);
+  akMagShape.quadraticCurveTo(-0.04, -0.1, -0.075, -0.17);
+  akMagShape.lineTo(-0.02, -0.185);
+  akMagShape.quadraticCurveTo(0.015, -0.1, 0.026, 0);
+  akMagShape.closePath();
+  const akMagGeo = new THREE.ExtrudeGeometry(akMagShape, {
+    depth: 0.028,
+    bevelEnabled: true,
+    bevelThickness: 0.003,
+    bevelSize: 0.003,
+    bevelSegments: 2,
+  });
+  akMagGeo.center();
+  addPart(ak47, akMagGeo, bakeliteMag, [0, -0.1, -0.08], [0, Math.PI / 2, 0]);
+
+  // Pistol grip
+  const akGripGeo = makeBeveledExtrude(
+    [
+      [-0.022, 0.03],
+      [0.022, 0.03],
+      [0.045, -0.075],
+      [0.004, -0.08],
+    ],
+    0.032,
+    0.004
+  );
+  addPart(ak47, akGripGeo, darkPolymer, [0, -0.065, 0.095], [0, Math.PI / 2, 0]);
+
+  // LatheGeometry tapered barrel + gas block + slanted compensator
+  const akBarrelPts = [
+    new THREE.Vector2(0.016, 0),
+    new THREE.Vector2(0.014, 0.18),
+    new THREE.Vector2(0.011, 0.19),
+    new THREE.Vector2(0.011, 0.36),
+    new THREE.Vector2(0.015, 0.37),
+    new THREE.Vector2(0.013, 0.41),
+    new THREE.Vector2(0.008, 0.41),
+  ];
+  addPart(ak47, new THREE.LatheGeometry(akBarrelPts, 14), bluedSteel, [0, 0.014, -0.25], [-Math.PI / 2, 0, 0]);
+  // Gas tube + front sight hood
+  addPart(ak47, new THREE.CylinderGeometry(0.009, 0.01, 0.21, 10), bluedSteel, [0, 0.036, -0.27], [Math.PI / 2, 0, 0]);
+  addPart(ak47, new THREE.TorusGeometry(0.011, 0.0025, 6, 12, Math.PI * 1.4), bluedSteel, [0, 0.038, -0.58], [0, 0, -Math.PI * 0.2]);
+  // Charging handle
+  addPart(ak47, new THREE.CylinderGeometry(0.006, 0.009, 0.04, 8), brushedBolt, [0.032, 0.016, -0.02], [0, 0, Math.PI / 2]);
+  addTacticalArms(ak47);
+
+  // ============================================================================
+  // 2. M4-S Tactical Carbine (Sculpted Upper/Lower, Suppressor, Holo Sight)
+  // ============================================================================
   const m4s = new THREE.Group();
-  addPart(m4s, new THREE.BoxGeometry(0.052, 0.072, 0.3), darkPolymer, [0, 0, 0.01]); // Upper/lower receiver
-  addPart(m4s, new THREE.BoxGeometry(0.046, 0.052, 0.22), gunmetal, [0, 0.01, -0.24]); // Quad rail
-  addPart(m4s, new THREE.CylinderGeometry(0.022, 0.022, 0.22, 12), darkPolymer, [0, 0.01, -0.45], [Math.PI / 2, 0, 0]); // Suppressor
-  addPart(m4s, new THREE.BoxGeometry(0.044, 0.075, 0.22), darkPolymer, [0, -0.01, 0.25]); // Collapsible stock
-  addPart(m4s, new THREE.BoxGeometry(0.036, 0.1, 0.048), darkPolymer, [0, -0.075, 0.09], [0.26, 0, 0]); // Grip
-  addPart(m4s, new THREE.BoxGeometry(0.034, 0.15, 0.062), gunmetal, [0, -0.09, -0.06], [-0.1, 0, 0]); // Straight STANAG mag
-  addPart(m4s, new THREE.BoxGeometry(0.034, 0.038, 0.085), gunmetal, [0, 0.06, -0.02]); // Red-dot optic housing
-  addPart(m4s, new THREE.CylinderGeometry(0.014, 0.014, 0.01, 12), opticLens, [0, 0.06, 0.024], [Math.PI / 2, 0, 0]); // Optic glass
-  addPart(m4s, new THREE.BoxGeometry(0.026, 0.014, 0.26), gunmetal, [0, 0.038, -0.06]); // Top Picatinny rail
-  addForearmAndGlove(m4s);
+  const m4RecGeo = makeBeveledExtrude(
+    [
+      [-0.15, -0.03],
+      [0.15, -0.03],
+      [0.15, 0.036],
+      [-0.15, 0.036],
+    ],
+    0.044,
+    0.005
+  );
+  addPart(m4s, m4RecGeo, anodizedRail, [0, 0.002, 0.01], [0, Math.PI / 2, 0]);
 
-  // --- 3. AWP-Lite Marksman (10 parts + arms) ---
+  // Slotted M-LOK handguard shroud
+  const m4RailGeo = makeBeveledExtrude(
+    [
+      [-0.11, -0.024],
+      [0.11, -0.024],
+      [0.11, 0.024],
+      [-0.11, 0.024],
+    ],
+    0.042,
+    0.005
+  );
+  addPart(m4s, m4RailGeo, anodizedRail, [0, 0.012, -0.24], [0, Math.PI / 2, 0]);
+
+  // LatheGeometry stepped tactical suppressor
+  const suppPts = [
+    new THREE.Vector2(0.016, 0),
+    new THREE.Vector2(0.022, 0.015),
+    new THREE.Vector2(0.022, 0.19),
+    new THREE.Vector2(0.019, 0.21),
+    new THREE.Vector2(0.009, 0.21),
+  ];
+  addPart(m4s, new THREE.LatheGeometry(suppPts, 16), darkPolymer, [0, 0.012, -0.35], [-Math.PI / 2, 0, 0]);
+
+  // Collapsible crane stock
+  const m4StockGeo = makeBeveledExtrude(
+    [
+      [-0.11, -0.04],
+      [0.11, -0.01],
+      [0.11, 0.024],
+      [-0.11, 0.024],
+    ],
+    0.038,
+    0.004
+  );
+  addPart(m4s, m4StockGeo, darkPolymer, [0, -0.008, 0.25], [0, Math.PI / 2, 0]);
+  addPart(m4s, akGripGeo.clone(), darkPolymer, [0, -0.065, 0.09], [0, Math.PI / 2, 0]);
+
+  // Curved STANAG magazine
+  const m4MagGeo = makeBeveledExtrude(
+    [
+      [-0.026, 0],
+      [0.026, 0],
+      [0.015, -0.14],
+      [-0.036, -0.135],
+    ],
+    0.028,
+    0.003
+  );
+  addPart(m4s, m4MagGeo, anodizedRail, [0, -0.085, -0.055], [0, Math.PI / 2, 0]);
+
+  // Holographic reflex sight housing + glowing red dot
+  addPart(m4s, new THREE.BoxGeometry(0.038, 0.012, 0.082), anodizedRail, [0, 0.044, -0.02]);
+  addPart(m4s, new THREE.BoxGeometry(0.006, 0.032, 0.055), anodizedRail, [-0.018, 0.064, -0.02]);
+  addPart(m4s, new THREE.BoxGeometry(0.006, 0.032, 0.055), anodizedRail, [0.018, 0.064, -0.02]);
+  addPart(m4s, new THREE.BoxGeometry(0.04, 0.006, 0.055), anodizedRail, [0, 0.08, -0.02]);
+  addPart(m4s, new THREE.PlaneGeometry(0.03, 0.026), opticGlass, [0, 0.064, -0.02]);
+  addPart(m4s, new THREE.CircleGeometry(0.0022, 8), redDotMat, [0, 0.064, -0.019]);
+  addTacticalArms(m4s);
+
+  // ============================================================================
+  // 3. AWP-Lite Marksman (Thumbhole Chassis, Lathe Scope & Fluted Barrel)
+  // ============================================================================
   const awp = new THREE.Group();
-  addPart(awp, new THREE.BoxGeometry(0.056, 0.072, 0.44), olivePolymer, [0, -0.008, -0.04]); // Chassis
-  addPart(awp, new THREE.BoxGeometry(0.048, 0.088, 0.24), olivePolymer, [0, -0.02, 0.26]); // Thumbhole stock
-  addPart(awp, new THREE.BoxGeometry(0.042, 0.042, 0.22), gunmetal, [0, 0.028, -0.02]); // Heavy receiver
-  addPart(awp, new THREE.CylinderGeometry(0.013, 0.016, 0.5, 12), gunmetal, [0, 0.028, -0.45], [Math.PI / 2, 0, 0]); // Fluted barrel
-  addPart(awp, new THREE.BoxGeometry(0.032, 0.032, 0.055), darkPolymer, [0, 0.028, -0.7], [0, 0, Math.PI / 4]); // Muzzle brake
-  addPart(awp, new THREE.CylinderGeometry(0.022, 0.018, 0.28, 14), darkPolymer, [0, 0.075, -0.08], [Math.PI / 2, 0, 0]); // Scope body
-  addPart(awp, new THREE.CylinderGeometry(0.028, 0.022, 0.07, 14), darkPolymer, [0, 0.075, -0.23], [Math.PI / 2, 0, 0]); // Objective bell
-  addPart(awp, new THREE.CylinderGeometry(0.022, 0.022, 0.01, 14), opticLens, [0, 0.075, 0.06], [Math.PI / 2, 0, 0]); // Scope ocular lens
-  addPart(awp, new THREE.BoxGeometry(0.038, 0.085, 0.075), darkPolymer, [0, -0.065, -0.08]); // Box mag
-  addPart(awp, new THREE.SphereGeometry(0.014, 10, 10), brushedBolt, [0.045, 0.022, 0.04]); // Bolt handle knob
-  addForearmAndGlove(awp);
+  // Thumbhole polymer chassis with cutout
+  const awpShape = new THREE.Shape();
+  awpShape.moveTo(-0.34, -0.025);
+  awpShape.lineTo(0.18, -0.032);
+  awpShape.lineTo(0.2, 0.028);
+  awpShape.lineTo(-0.34, 0.028);
+  awpShape.closePath();
+  const thumbHole = new THREE.Path();
+  thumbHole.moveTo(0.06, -0.016);
+  thumbHole.lineTo(0.14, -0.016);
+  thumbHole.lineTo(0.14, 0.014);
+  thumbHole.lineTo(0.06, 0.014);
+  thumbHole.closePath();
+  awpShape.holes.push(thumbHole);
+  const awpChassisGeo = new THREE.ExtrudeGeometry(awpShape, {
+    depth: 0.046,
+    bevelEnabled: true,
+    bevelThickness: 0.005,
+    bevelSize: 0.005,
+    bevelSegments: 2,
+  });
+  awpChassisGeo.center();
+  addPart(awp, awpChassisGeo, oliveChassis, [0, -0.01, 0.04], [0, Math.PI / 2, 0]);
+
+  // Heavy precision receiver
+  addPart(awp, new THREE.CylinderGeometry(0.021, 0.021, 0.24, 12), bluedSteel, [0, 0.028, -0.03], [Math.PI / 2, 0, 0]);
+
+  // LatheGeometry fluted sniper barrel + multi-baffle muzzle brake
+  const awpBarrelPts = [
+    new THREE.Vector2(0.018, 0),
+    new THREE.Vector2(0.014, 0.44),
+    new THREE.Vector2(0.021, 0.45),
+    new THREE.Vector2(0.021, 0.52),
+    new THREE.Vector2(0.01, 0.52),
+  ];
+  addPart(awp, new THREE.LatheGeometry(awpBarrelPts, 14), bluedSteel, [0, 0.028, -0.16], [-Math.PI / 2, 0, 0]);
+
+  // LatheGeometry sniper scope tube + objective bell + ocular ring
+  const scopePts = [
+    new THREE.Vector2(0.022, 0),
+    new THREE.Vector2(0.022, 0.04),
+    new THREE.Vector2(0.016, 0.06),
+    new THREE.Vector2(0.016, 0.19),
+    new THREE.Vector2(0.027, 0.23),
+    new THREE.Vector2(0.027, 0.3),
+    new THREE.Vector2(0.023, 0.3),
+  ];
+  addPart(awp, new THREE.LatheGeometry(scopePts, 16), anodizedRail, [0, 0.074, 0.06], [-Math.PI / 2, 0, 0]);
+  addPart(awp, new THREE.CircleGeometry(0.02, 14), opticGlass, [0, 0.074, 0.061], [0, Math.PI, 0]);
+  // Scope elevation turret + bolt handle
+  addPart(awp, new THREE.CylinderGeometry(0.009, 0.009, 0.018, 10), anodizedRail, [0, 0.095, -0.06]);
+  addPart(awp, new THREE.CylinderGeometry(0.005, 0.005, 0.045, 8), brushedBolt, [0.028, 0.024, 0.03], [0, 0, -Math.PI / 3]);
+  addPart(awp, new THREE.SphereGeometry(0.012, 10, 10), brushedBolt, [0.048, 0.015, 0.035]);
+  // Box magazine
+  addPart(awp, new THREE.BoxGeometry(0.034, 0.075, 0.072), darkPolymer, [0, -0.055, -0.06]);
+  addTacticalArms(awp);
 
   // Muzzle flash star + point light
   const muzzleFlash = new THREE.Group();

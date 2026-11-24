@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { tacticalAudio } from './audio';
 import { BotManager, collidesHorizontal, sampleFloorHeight, updateBots } from './bots';
-import { buildCompoundMap, BuiltCompoundMap } from './mapBuilder';
+import { buildCompoundMap, BuiltCompoundMap, EnvLightFixture } from './mapBuilder';
 import { createTacticalMaterials, TacticalMaterials } from './textures';
 import { GameMode, GamePhase, HudSnapshot, KillFeedEntry, MinimapBlip, WeaponId } from './types';
 import { createWeaponViewModelRig, WEAPON_SPECS, WeaponViewModelRig } from './weapons';
@@ -20,6 +20,26 @@ interface ImpactParticle {
   life: number;
 }
 
+interface ShellCasing {
+  mesh: THREE.Mesh;
+  vel: THREE.Vector3;
+  rotVel: THREE.Vector3;
+  life: number;
+}
+
+interface PooledFlashLight {
+  light: THREE.PointLight;
+  life: number;
+  maxLife: number;
+  peakIntensity: number;
+}
+
+interface EnvPointLightEntry {
+  light: THREE.PointLight;
+  fixture: EnvLightFixture;
+  phase: number;
+}
+
 const EYE_STAND = 1.68;
 const EYE_CROUCH = 1.15;
 const PLAYER_RADIUS = 0.42;
@@ -31,12 +51,16 @@ const _wishDir = new THREE.Vector3();
 const _rayOrigin = new THREE.Vector3();
 const _rayDir = new THREE.Vector3();
 const _muzzleWorld = new THREE.Vector3();
+const _assistPos = new THREE.Vector3();
+const _assistDir = new THREE.Vector3();
+const _sparkPos = new THREE.Vector3();
 
 export class GameEngine {
   private container: HTMLElement;
   private renderer!: THREE.WebGLRenderer;
   private scene!: THREE.Scene;
   private camera!: THREE.PerspectiveCamera;
+  private sunLight!: THREE.DirectionalLight;
   private isSoftwareGl = false;
   private materials!: TacticalMaterials;
   private map!: BuiltCompoundMap;
@@ -81,6 +105,7 @@ export class GameEngine {
   private damageFlash = 0;
   private damageDirectionAngle: number | null = null;
   private damageDirTimer = 0;
+  private timeSinceDamage = 10;
 
   // Weapon state
   private weaponId: WeaponId = 'ak47';
@@ -111,9 +136,19 @@ export class GameEngine {
   private touchFiring = false;
   private touchDefusing = false;
 
-  // Visual FX pools
+  // Visual FX & Dynamic Point Light pools
+  private envPointLights: EnvPointLightEntry[] = [];
+  private c4PointLight!: THREE.PointLight;
+  private flashLightPool: PooledFlashLight[] = [];
+  private flashPoolCursor = 0;
   private tracers: ActiveTracer[] = [];
   private particles: ImpactParticle[] = [];
+  private shellCasings: ShellCasing[] = [];
+  private bulletDecals: THREE.Mesh[] = [];
+  private decalIndex = 0;
+  private decalGeo = new THREE.PlaneGeometry(0.14, 0.14);
+  private shellGeo = new THREE.CylinderGeometry(0.006, 0.007, 0.028, 6);
+  private shellMat = new THREE.MeshStandardMaterial({ color: 0xd9a036, roughness: 0.25, metalness: 0.88 });
   private particleGeo = new THREE.BoxGeometry(0.06, 0.06, 0.06);
   private particleMat = new THREE.MeshBasicMaterial({ color: 0xe7c998 });
   private bloodParticleMat = new THREE.MeshBasicMaterial({ color: 0xef4444 });
@@ -160,8 +195,10 @@ export class GameEngine {
 
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.08;
-    this.renderer.setPixelRatio(this.isSoftwareGl ? 1 : Math.min(window.devicePixelRatio, 2));
+    this.renderer.toneMappingExposure = 1.04;
+    this.renderer.setPixelRatio(
+      this.isSoftwareGl ? 1 : Math.min(window.devicePixelRatio, this.isTouchDevice() ? 1.5 : 2)
+    );
     this.renderer.setSize(this.container.clientWidth || window.innerWidth, this.container.clientHeight || window.innerHeight);
     this.renderer.shadowMap.enabled = !this.isSoftwareGl;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -172,39 +209,43 @@ export class GameEngine {
     this.container.appendChild(this.renderer.domElement);
 
     this.scene = new THREE.Scene();
-    const skyColor = new THREE.Color(0xcfdbe6);
+    const skyColor = new THREE.Color(0xd9ccb8);
     this.scene.background = skyColor;
-    this.scene.fog = new THREE.FogExp2(0xd8cbb6, 0.0095);
+    this.scene.fog = new THREE.FogExp2(0xd9ccb8, 0.0068);
 
     const aspect = (this.container.clientWidth || window.innerWidth) / (this.container.clientHeight || window.innerHeight);
     this.camera = new THREE.PerspectiveCamera(74, aspect, 0.08, 280);
     this.camera.rotation.order = 'YXZ';
     this.scene.add(this.camera);
 
-    // Mandatory studio/environment reflection for PBR metals & optics
+    // Studio environment reflection kept subtle (0.28) so outdoor shadows stay crisp & deep
     const pmrem = new THREE.PMREMGenerator(this.renderer);
     this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    this.scene.environmentIntensity = 0.28;
     pmrem.dispose();
 
-    // Warm desert key sun + cool sky hemisphere fill + rim directional light
-    const hemiLight = new THREE.HemisphereLight(0xa5c8e8, 0x9c7c54, 0.72);
+    // High-contrast Golden-Hour Sun vs Cool Sky-Blue Shadow Fill
+    const hemiLight = new THREE.HemisphereLight(0x88b8e8, 0x70583c, 0.44);
     this.scene.add(hemiLight);
 
-    const sunLight = new THREE.DirectionalLight(0xfff0d4, 1.85);
+    const sunLight = new THREE.DirectionalLight(0xffe5b4, 2.75);
     sunLight.position.set(42, 64, 34);
     sunLight.castShadow = !this.isSoftwareGl;
     sunLight.shadow.mapSize.set(2048, 2048);
     sunLight.shadow.camera.near = 10;
     sunLight.shadow.camera.far = 165;
-    sunLight.shadow.camera.left = -56;
-    sunLight.shadow.camera.right = 56;
-    sunLight.shadow.camera.top = 56;
-    sunLight.shadow.camera.bottom = -56;
-    sunLight.shadow.bias = -0.0005;
+    sunLight.shadow.camera.left = -30;
+    sunLight.shadow.camera.right = 30;
+    sunLight.shadow.camera.top = 30;
+    sunLight.shadow.camera.bottom = -30;
+    sunLight.shadow.radius = 2.2;
+    sunLight.shadow.bias = -0.00035;
     sunLight.shadow.normalBias = 0.02;
     this.scene.add(sunLight);
+    this.scene.add(sunLight.target);
+    this.sunLight = sunLight;
 
-    const rimLight = new THREE.DirectionalLight(0x93c5fd, 0.35);
+    const rimLight = new THREE.DirectionalLight(0x93c5fd, 0.32);
     rimLight.position.set(-40, 28, -45);
     this.scene.add(rimLight);
 
@@ -213,7 +254,9 @@ export class GameEngine {
     this.map = buildCompoundMap(this.materials);
     this.scene.add(this.map.worldGroup);
 
-    this.botManager = new BotManager(this.scene);
+    this.initDynamicPointLights();
+
+    this.botManager = new BotManager(this.scene, this.materials.contactShadowMat);
 
     // Attach first-person weapon viewmodel to camera
     this.weaponRig = createWeaponViewModelRig();
@@ -230,6 +273,61 @@ export class GameEngine {
     if (!this.isSoftwareGl) {
       this.renderer.compile(this.scene, this.camera);
     }
+  }
+
+  private initDynamicPointLights(): void {
+    // Pre-allocate environmental fixture point lights (warehouse sodium lamps, sconce, helipad beacon)
+    this.map.envLightFixtures.forEach((fixture, idx) => {
+      const light = new THREE.PointLight(fixture.color, fixture.baseIntensity, fixture.distance, 2);
+      light.position.copy(fixture.position);
+      this.scene.add(light);
+      this.envPointLights.push({
+        light,
+        fixture,
+        phase: idx * 1.9,
+      });
+    });
+
+    // Pre-allocated C4 bomb site pulse light (inactive unless in Defusal mode)
+    this.c4PointLight = new THREE.PointLight(0xff3b30, 0, 13, 2);
+    this.scene.add(this.c4PointLight);
+
+    // Fixed pool of transient combat point lights for muzzle flashes & bullet impact sparks
+    // Avoids runtime shader recompilation by keeping light count fixed in scene graph
+    const poolSize = this.isSoftwareGl ? 2 : 4;
+    for (let i = 0; i < poolSize; i++) {
+      const light = new THREE.PointLight(0xffc864, 0, 14, 2);
+      this.scene.add(light);
+      this.flashLightPool.push({
+        light,
+        life: 0,
+        maxLife: 0.07,
+        peakIntensity: 0,
+      });
+    }
+  }
+
+  private spawnFlashLight(
+    pos: THREE.Vector3,
+    color: number,
+    intensity: number,
+    duration = 0.065,
+    distance = 14
+  ): void {
+    if (this.flashLightPool.length === 0) return;
+    // Prefer an expired slot; otherwise overwrite oldest cursor
+    let slot = this.flashLightPool.find((s) => s.life <= 0);
+    if (!slot) {
+      slot = this.flashLightPool[this.flashPoolCursor % this.flashLightPool.length];
+      this.flashPoolCursor++;
+    }
+    slot.light.position.copy(pos);
+    slot.light.color.setHex(color);
+    slot.light.distance = distance;
+    slot.light.intensity = intensity;
+    slot.peakIntensity = intensity;
+    slot.life = duration;
+    slot.maxLife = duration;
   }
 
   private bindEvents(): void {
@@ -481,6 +579,7 @@ export class GameEngine {
     this.armor = 100;
     this.damageFlash = 0;
     this.damageDirectionAngle = null;
+    this.timeSinceDamage = 10;
     this.recoilOffsetPitch = 0;
     this.recoilOffsetYaw = 0;
     this.isScoped = false;
@@ -502,9 +601,17 @@ export class GameEngine {
       p.respawnTimer = 0;
     });
 
-    if (this.mode === 'skirmish') {
+    if (this.mode === 'casual') {
       this.map.bombSites.A.chargeGroup.visible = false;
       this.map.bombSites.B.chargeGroup.visible = false;
+      if (this.c4PointLight) this.c4PointLight.intensity = 0;
+      const count = Math.min(4 + Math.floor((this.wave - 1) * 1.5), 8);
+      this.botManager.spawnWave(count, this.map.botSpawnPoints, this.map.waypoints, 0.55);
+      this.showRoundMessage(`Casual Wave ${this.wave} · ${count} Easy Targets`, 2.6);
+    } else if (this.mode === 'skirmish') {
+      this.map.bombSites.A.chargeGroup.visible = false;
+      this.map.bombSites.B.chargeGroup.visible = false;
+      if (this.c4PointLight) this.c4PointLight.intensity = 0;
       const count = Math.min(4 + (this.wave - 1) * 2, 10);
       this.botManager.spawnWave(count, this.map.botSpawnPoints, this.map.waypoints, 1 + (this.wave - 1) * 0.08);
       this.showRoundMessage(`Wave ${this.wave} · ${count} Hostiles Inbound`, 2.6);
@@ -516,6 +623,9 @@ export class GameEngine {
       this.map.bombSites.A.chargeGroup.visible = this.activeSite === 'A';
       this.map.bombSites.B.chargeGroup.visible = this.activeSite === 'B';
       const sitePos = this.map.bombSites[this.activeSite].position;
+      if (this.c4PointLight) {
+        this.c4PointLight.position.set(sitePos.x, sitePos.y + 0.72, sitePos.z);
+      }
       this.botManager.spawnWave(6, this.map.botSpawnPoints, this.map.waypoints, 1.0, sitePos);
       this.showRoundMessage(`Charge Armed at ${this.map.bombSites[this.activeSite].label}`, 3.2);
     }
@@ -560,24 +670,59 @@ export class GameEngine {
     this.weaponRig.muzzleLight.intensity = 4.2;
     this.weaponKickZ = 0.065;
 
+    const isCasual = this.mode === 'casual';
     const moveSpeed = Math.hypot(
       (this.keys['KeyD'] ? 1 : 0) - (this.keys['KeyA'] ? 1 : 0) + this.touchMoveX,
       (this.keys['KeyW'] ? 1 : 0) - (this.keys['KeyS'] ? 1 : 0) + this.touchMoveY
     );
     const crouchBonus = this.keys['KeyC'] || this.keys['ControlLeft'] ? 0.55 : 1.0;
     const scopeBonus = this.isScoped ? 0.25 : 1.0;
-    const spread = (spec.spreadBase + Math.min(1, moveSpeed) * spec.spreadMove) * crouchBonus * scopeBonus;
+    const modeSpreadScale = isCasual ? 0.4 : 1.0;
+    const spread = (spec.spreadBase + Math.min(1, moveSpeed) * spec.spreadMove) * crouchBonus * scopeBonus * modeSpreadScale;
 
     _rayOrigin.copy(this.camera.position);
     this.camera.getWorldDirection(_rayDir);
-    _rayDir.x += (Math.random() - 0.5) * spread * 2;
-    _rayDir.y += (Math.random() - 0.5) * spread * 2;
-    _rayDir.z += (Math.random() - 0.5) * spread * 2;
-    _rayDir.normalize();
 
-    this.recoilOffsetPitch += spec.recoilPitch;
-    this.recoilOffsetYaw += (Math.random() - 0.5) * spec.recoilYaw * 2;
-    this.currentSpreadVisual = Math.min(1.6, this.currentSpreadVisual + 0.35);
+    // Subtle forgiving bullet magnetism inside a ~5-degree crosshair cone in Casual mode
+    if (isCasual) {
+      let bestDot = 0.9958;
+      let assistAimFound = false;
+      for (const b of this.botManager.bots) {
+        if (!b.alive) continue;
+        // Aim toward upper torso / head center
+        _assistPos.set(b.position.x, b.position.y + 1.38, b.position.z);
+        _assistDir.subVectors(_assistPos, _rayOrigin);
+        const dist = _assistDir.length();
+        if (dist < 0.8 || dist > 65) continue;
+        _assistDir.divideScalar(dist);
+        const dot = _rayDir.dot(_assistDir);
+        if (dot > bestDot) {
+          this.raycaster.set(_rayOrigin, _assistDir);
+          this.raycaster.far = dist - 0.35;
+          if (this.raycaster.intersectObjects(this.map.raycastTargets, false).length === 0) {
+            bestDot = dot;
+            _rayDir.lerp(_assistDir, 0.72).normalize();
+            assistAimFound = true;
+          }
+        }
+      }
+      if (!assistAimFound) {
+        _rayDir.x += (Math.random() - 0.5) * spread * 2;
+        _rayDir.y += (Math.random() - 0.5) * spread * 2;
+        _rayDir.z += (Math.random() - 0.5) * spread * 2;
+        _rayDir.normalize();
+      }
+    } else {
+      _rayDir.x += (Math.random() - 0.5) * spread * 2;
+      _rayDir.y += (Math.random() - 0.5) * spread * 2;
+      _rayDir.z += (Math.random() - 0.5) * spread * 2;
+      _rayDir.normalize();
+    }
+
+    const recoilScale = isCasual ? 0.45 : 1.0;
+    this.recoilOffsetPitch += spec.recoilPitch * recoilScale;
+    this.recoilOffsetYaw += (Math.random() - 0.5) * spec.recoilYaw * 2 * recoilScale;
+    this.currentSpreadVisual = Math.min(1.6, this.currentSpreadVisual + (isCasual ? 0.18 : 0.35));
 
     // Raycast against world geometry + bot hitboxes
     this.raycaster.set(_rayOrigin, _rayDir);
@@ -594,7 +739,7 @@ export class GameEngine {
       hitPoint = botHit.point.clone();
       const { botId, hitZone } = botHit.object.userData as { botId: number; hitZone: 'head' | 'body' };
       const isHead = hitZone === 'head';
-      const dmg = Math.round(spec.damage * (isHead ? spec.headshotMult : 1));
+      const dmg = Math.round(spec.damage * (isHead ? spec.headshotMult : 1) * (isCasual ? 1.25 : 1));
       const res = this.botManager.damageBot(botId, dmg);
 
       this.hitMarker = isHead ? 'head' : 'body';
@@ -618,11 +763,19 @@ export class GameEngine {
       }
     } else if (worldHits.length > 0) {
       this.spawnImpactParticles(hitPoint, false);
+      _sparkPos.copy(hitPoint).addScaledVector(_rayDir, -0.2);
+      this.spawnFlashLight(_sparkPos, 0xffd580, 5.0, 0.05, 6.5);
+      const hit = worldHits[0];
+      if (hit.face) {
+        this.spawnBulletDecal(hitPoint, hit.face.normal, hit.object);
+      }
     }
 
-    // Spawn bullet tracer from weapon muzzle to hit point
+    // Spawn world-space muzzle flash point light, bullet tracer & eject spinning brass shell casing
     this.weaponRig.muzzleFlash.getWorldPosition(_muzzleWorld);
+    this.spawnFlashLight(_muzzleWorld, 0xffc864, this.weaponId === 'm4s' ? 6.5 : 13.5, 0.065, 14);
     this.spawnTracer(_muzzleWorld, hitPoint, spec.tracerColor);
+    this.spawnShellCasing();
 
     if (ammo.mag === 0 && ammo.reserve > 0) {
       this.startReload();
@@ -655,6 +808,49 @@ export class GameEngine {
     }
   }
 
+  private spawnBulletDecal(pos: THREE.Vector3, localNormal: THREE.Vector3, targetObj: THREE.Object3D): void {
+    const worldNormal = localNormal.clone().transformDirection(targetObj.matrixWorld).normalize();
+    let decal: THREE.Mesh;
+    if (this.bulletDecals.length < 36) {
+      decal = new THREE.Mesh(this.decalGeo, this.materials.bulletDecalMat);
+      this.scene.add(decal);
+      this.bulletDecals.push(decal);
+    } else {
+      decal = this.bulletDecals[this.decalIndex % 36];
+      this.decalIndex++;
+    }
+    decal.position.copy(pos).addScaledVector(worldNormal, 0.018);
+    decal.lookAt(pos.x + worldNormal.x, pos.y + worldNormal.y, pos.z + worldNormal.z);
+    decal.rotateZ(Math.random() * Math.PI * 2);
+  }
+
+  private spawnShellCasing(): void {
+    if (this.shellCasings.length > 18) return;
+    const mesh = new THREE.Mesh(this.shellGeo, this.shellMat);
+    const camRight = new THREE.Vector3(1, 0, 0).applyQuaternion(this.camera.quaternion);
+    const camUp = new THREE.Vector3(0, 1, 0).applyQuaternion(this.camera.quaternion);
+    const camFwd = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
+
+    mesh.position
+      .copy(this.camera.position)
+      .addScaledVector(camRight, 0.24)
+      .addScaledVector(camUp, -0.15)
+      .addScaledVector(camFwd, 0.32);
+
+    const vel = new THREE.Vector3()
+      .addScaledVector(camRight, 2.2 + Math.random() * 0.8)
+      .addScaledVector(camUp, 1.4 + Math.random() * 0.6)
+      .addScaledVector(camFwd, (Math.random() - 0.5) * 0.6);
+
+    this.scene.add(mesh);
+    this.shellCasings.push({
+      mesh,
+      vel,
+      rotVel: new THREE.Vector3(14 + Math.random() * 10, 12, 16),
+      life: 0.75,
+    });
+  }
+
   private tick = (): void => {
     if (this.disposed) return;
 
@@ -666,8 +862,15 @@ export class GameEngine {
       const t = this.clock.getElapsedTime() * 0.14;
       this.camera.position.set(Math.sin(t) * 28, 10.5, Math.cos(t) * 28);
       this.camera.lookAt(0, 1.4, -2);
+      this.sunLight.target.position.set(0, 0, 0);
+      this.sunLight.position.set(42, 64, 34);
     } else if (this.phase === 'playing') {
       this.updatePlaying(dt);
+      // Snap directional shadow camera around player for ultra-crisp local shadows
+      const sx = Math.round(this.playerPos.x * 2) / 2;
+      const sz = Math.round(this.playerPos.z * 2) / 2;
+      this.sunLight.target.position.set(sx, 0, sz);
+      this.sunLight.position.set(sx + 42, 64, sz + 34);
     }
 
     this.updateFX(dt);
@@ -839,7 +1042,39 @@ export class GameEngine {
       }
     });
 
-    // Update bots AI
+    // Passive shield & health regeneration in Casual mode when out of fire
+    this.timeSinceDamage += dt;
+    if (this.mode === 'casual' && this.timeSinceDamage > 2.2) {
+      if (this.health < 100) this.health = Math.min(100, this.health + dt * 11);
+      if (this.armor < 100) this.armor = Math.min(100, this.armor + dt * 6);
+    }
+
+    // Update bots AI with mode-appropriate lethality
+    const botOpts =
+      this.mode === 'casual'
+        ? {
+            difficultyFireScale: 0.25,
+            burstPauseScale: 1.9,
+            minDamage: 3,
+            maxDamage: 5,
+            strafeSpeedScale: 0.65,
+          }
+        : this.mode === 'skirmish'
+        ? {
+            difficultyFireScale: 0.85 + this.wave * 0.08,
+            burstPauseScale: 1.0,
+            minDamage: 9,
+            maxDamage: 13,
+            strafeSpeedScale: 1.0,
+          }
+        : {
+            difficultyFireScale: 1.0,
+            burstPauseScale: 1.0,
+            minDamage: 9,
+            maxDamage: 14,
+            strafeSpeedScale: 1.0,
+          };
+
     updateBots(
       dt,
       this.botManager,
@@ -849,10 +1084,11 @@ export class GameEngine {
       this.map.ramps,
       this.map.raycastTargets,
       this.map.waypoints,
-      this.mode === 'skirmish' ? 0.85 + this.wave * 0.08 : 1.0,
+      botOpts,
       (muzzlePos, targetPos, hitsPlayer, damage, angleFromPlayer) => {
         tacticalAudio.playGunshot('ak47', 0.35);
         this.spawnTracer(muzzlePos, targetPos, 0xff7b54);
+        this.spawnFlashLight(muzzlePos, 0xff9a44, 11.5, 0.065, 13);
         if (hitsPlayer && this.phase === 'playing') {
           this.applyPlayerDamage(damage, angleFromPlayer);
         }
@@ -861,13 +1097,14 @@ export class GameEngine {
 
     // Check mode win / wave progression
     const botsAlive = this.botManager.bots.filter((b) => b.alive).length;
-    if (this.mode === 'skirmish') {
+    if (this.mode === 'casual' || this.mode === 'skirmish') {
       if (botsAlive === 0) {
         if (this.waveTransitionTimer <= 0) {
           this.waveTransitionTimer = 2.6;
           this.showRoundMessage(`Wave ${this.wave} Cleared · Resupplying`, 2.5);
-          this.health = Math.min(100, this.health + 25);
-          this.armor = Math.min(100, this.armor + 25);
+          const healAmt = this.mode === 'casual' ? 50 : 25;
+          this.health = Math.min(100, this.health + healAmt);
+          this.armor = Math.min(100, this.armor + healAmt);
           tacticalAudio.playRoundEnd(true);
         } else {
           this.waveTransitionTimer -= dt;
@@ -905,8 +1142,6 @@ export class GameEngine {
       }
 
       if (botsAlive === 0 && this.bombTimer > 0) {
-        // Also reward swift squad elimination or keep bomb ticking? Let's let player defuse OR if all bots down speed up?
-        // Classic CS: even if defenders are eliminated, you still defuse the planted charge! Show hint!
         if (!this.roundMessage && !nearSite) {
           this.showRoundMessage(`Squad Eliminated · Defuse Charge at Site ${this.activeSite}`, 3.0);
         }
@@ -946,6 +1181,7 @@ export class GameEngine {
 
   private applyPlayerDamage(amount: number, sourceAngleWorld: number): void {
     tacticalAudio.playPlayerHurt();
+    this.timeSinceDamage = 0;
     this.damageFlash = 0.85;
     // Relative angle for directional damage arc
     this.damageDirectionAngle = sourceAngleWorld - this.yaw;
@@ -979,6 +1215,48 @@ export class GameEngine {
   }
 
   private updateFX(dt: number): void {
+    const elapsed = this.clock.getElapsedTime();
+
+    // Animate environmental fixture point lights (warehouse hum, steady sconce, helipad strobe)
+    for (let i = 0; i < this.envPointLights.length; i++) {
+      const entry = this.envPointLights[i];
+      if (entry.fixture.kind === 'warehouse') {
+        const flicker = 0.94 + Math.sin(elapsed * 19 + entry.phase) * 0.03 + Math.sin(elapsed * 43 + entry.phase) * 0.03;
+        entry.light.intensity = entry.fixture.baseIntensity * flicker;
+        entry.fixture.bulbMat.emissiveIntensity = 2.1 * flicker;
+      } else if (entry.fixture.kind === 'beacon') {
+        const pulse = Math.pow(Math.max(0, Math.sin(elapsed * 3.4 + entry.phase)), 2);
+        entry.light.intensity = entry.fixture.baseIntensity * (0.25 + pulse * 0.95);
+        entry.fixture.bulbMat.emissiveIntensity = 0.7 + pulse * 2.2;
+      }
+    }
+
+    // Pulse red C4 charge beacon point light in Defusal mode
+    if (this.c4PointLight) {
+      if (this.mode === 'defusal' && this.phase === 'playing') {
+        const rate = this.bombTimer < 10 ? 12 : this.bombTimer < 20 ? 6.5 : 3.5;
+        const pulse = Math.pow(0.5 + 0.5 * Math.sin(elapsed * rate), 2);
+        this.c4PointLight.intensity = 1.2 + pulse * 6.5;
+      } else {
+        this.c4PointLight.intensity = 0;
+      }
+    }
+
+    // Decay pooled combat flash point lights (muzzle flashes & impact sparks)
+    for (let i = 0; i < this.flashLightPool.length; i++) {
+      const slot = this.flashLightPool[i];
+      if (slot.life > 0) {
+        slot.life -= dt;
+        if (slot.life <= 0) {
+          slot.life = 0;
+          slot.light.intensity = 0;
+        } else {
+          const ratio = slot.life / slot.maxLife;
+          slot.light.intensity = slot.peakIntensity * ratio * ratio;
+        }
+      }
+    }
+
     if (this.muzzleFlashTimer > 0) {
       this.muzzleFlashTimer -= dt;
       if (this.muzzleFlashTimer <= 0) {
@@ -1010,6 +1288,21 @@ export class GameEngine {
         p.vel.y -= 12 * dt;
         p.mesh.position.addScaledVector(p.vel, dt);
         p.mesh.scale.setScalar(p.life / 0.32);
+      }
+    }
+
+    for (let i = this.shellCasings.length - 1; i >= 0; i--) {
+      const s = this.shellCasings[i];
+      s.life -= dt;
+      if (s.life <= 0) {
+        this.scene.remove(s.mesh);
+        this.shellCasings.splice(i, 1);
+      } else {
+        s.vel.y -= 13.5 * dt;
+        s.mesh.position.addScaledVector(s.vel, dt);
+        s.mesh.rotation.x += s.rotVel.x * dt;
+        s.mesh.rotation.y += s.rotVel.y * dt;
+        s.mesh.rotation.z += s.rotVel.z * dt;
       }
     }
   }
@@ -1108,6 +1401,11 @@ export class GameEngine {
       t.line.geometry.dispose();
       t.mat.dispose();
     });
+    this.bulletDecals.forEach((d) => this.scene.remove(d));
+    this.shellCasings.forEach((s) => this.scene.remove(s.mesh));
+    this.decalGeo.dispose();
+    this.shellGeo.dispose();
+    this.shellMat.dispose();
     this.particleGeo.dispose();
     this.particleMat.dispose();
     this.bloodParticleMat.dispose();

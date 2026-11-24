@@ -80,10 +80,10 @@ export const GameMenu: React.FC<GameMenuProps> = ({
               </div>
               <div>
                 <div className="text-[11px] sm:text-xs text-slate-400">
-                  {hud.mode === 'skirmish' ? 'Wave' : 'Time Left'}
+                  {hud.mode === 'defusal' ? 'Time Left' : 'Wave'}
                 </div>
                 <div className="font-display text-xl sm:text-2xl font-bold tabular-nums text-amber-400 mt-0.5">
-                  {hud.mode === 'skirmish' ? hud.wave : `${hud.bombTimer.toFixed(1)}s`}
+                  {hud.mode === 'defusal' ? `${hud.bombTimer.toFixed(1)}s` : hud.wave}
                 </div>
               </div>
             </div>
@@ -93,11 +93,28 @@ export const GameMenu: React.FC<GameMenuProps> = ({
           {isMenu && (
             <div className="pb-4 border-b border-white/10">
               <div className="text-xs font-medium text-slate-400 mb-2.5">Game Mode</div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 sm:gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => onSelectMode('casual')}
+                  className={`text-left p-3 border transition-colors ${
+                    selectedMode === 'casual'
+                      ? 'bg-emerald-500/15 border-emerald-400'
+                      : 'bg-[#0b0e12]/70 border-white/10 hover:border-white/25'
+                  }`}
+                >
+                  <div className="font-display text-sm sm:text-base font-bold text-white">
+                    Casual · Easy
+                  </div>
+                  <p className="text-xs text-slate-300 mt-1 leading-relaxed">
+                    Low-HP bots, gentle damage, aim assist, and passive health regen.
+                  </p>
+                </button>
+
                 <button
                   type="button"
                   onClick={() => onSelectMode('skirmish')}
-                  className={`text-left p-3 sm:p-4 border transition-colors ${
+                  className={`text-left p-3 border transition-colors ${
                     selectedMode === 'skirmish'
                       ? 'bg-amber-500/15 border-amber-400'
                       : 'bg-[#0b0e12]/70 border-white/10 hover:border-white/25'
@@ -114,7 +131,7 @@ export const GameMenu: React.FC<GameMenuProps> = ({
                 <button
                   type="button"
                   onClick={() => onSelectMode('defusal')}
-                  className={`text-left p-3 sm:p-4 border transition-colors ${
+                  className={`text-left p-3 border transition-colors ${
                     selectedMode === 'defusal'
                       ? 'bg-amber-500/15 border-amber-400'
                       : 'bg-[#0b0e12]/70 border-white/10 hover:border-white/25'
