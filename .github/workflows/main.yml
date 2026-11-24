@@ -31,7 +31,7 @@ jobs:
       - name: Wrap web build as Android app (Capacitor)
         run: |
           npm install --legacy-peer-deps @capacitor/core@7 @capacitor/cli@7 @capacitor/android@7
-          npx cap init "Counter Sikek" com.example.countersikek --web-dir dist
+          echo '{"appId":"com.example.countersikek","appName":"Counter Sikek","webDir":"dist"}' > capacitor.config.json
           npx cap add android
           npx cap sync android
           sed -i 's/<activity/<activity android:screenOrientation="landscape"/' android/app/src/main/AndroidManifest.xml
